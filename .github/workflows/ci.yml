@@ -23,9 +23,7 @@ jobs:
 
       # --ignore-scripts skips native builds of transitive n8n deps
       # (e.g. isolated-vm). We only need n8n-workflow for type-checking.
-      # --legacy-peer-deps: @n8n/node-cli@0.23 peer-demands eslint >= 9, but
-      # eslint-plugin-n8n-nodes-base still tracks the eslint 8 line.
-      - run: npm ci --ignore-scripts --legacy-peer-deps
+      - run: npm ci --ignore-scripts
 
       - run: npm run lint
 

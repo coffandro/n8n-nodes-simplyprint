@@ -4,7 +4,7 @@ node_modules
 src
 .eslintrc.js
 .prettierrc.js
-gulpfile.js
+eslint.config.mjs
 nodes
 credentials
 tsconfig.json

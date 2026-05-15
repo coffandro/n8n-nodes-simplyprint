@@ -88,7 +88,6 @@ const EVENT_OPTIONS = [
 	{
 		name: 'Printer AutoPrint State Changed',
 		value: 'printer.autoprint_state_changed',
-		// eslint-disable-next-line n8n-nodes-base/node-param-operation-option-action-miscased -- "AutoPrint" is a SimplyPrint trademark, preserve casing
 		action: 'Printer AutoPrint state changed',
 		description: 'A printer\'s AutoPrint enabled / paused / disabled state changed',
 	},
@@ -150,7 +149,6 @@ const EVENT_OPTIONS = [
 	{
 		name: 'Company AutoPrint State Changed',
 		value: 'company.autoprint_state_changed',
-		// eslint-disable-next-line n8n-nodes-base/node-param-operation-option-action-miscased -- "AutoPrint" is a SimplyPrint trademark, preserve casing
 		action: 'Company AutoPrint state changed',
 		description: 'AutoPrint was enabled or disabled account-wide',
 	},
@@ -432,6 +430,7 @@ interface StoredWebhook extends IDataObject {
 	event?: string;
 }
 
+// eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool -- Webhook trigger: started by SimplyPrint events, not invokable by an AI agent. The rule's AI-sub-node carve-out (empty inputs + non-`main` outputs) doesn't fit a regular event source.
 export class SimplyPrintTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'SimplyPrint Trigger',

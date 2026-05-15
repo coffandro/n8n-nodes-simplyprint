@@ -12,13 +12,17 @@ Local setup, test recipes, and release steps for `@simplyprint/n8n-nodes-simplyp
 
 ```bash
 npm ci
-npm run build          # tsc + copy icons + copy codex files to dist/
-npm run lint           # eslint with plugin:n8n-nodes-base/{community,credentials,nodes}
+npm run build          # `n8n-node build` — runs tsc and copies icons / codex files to dist/
+npm run lint           # `n8n-node lint` — eslint flat config from @n8n/node-cli (strict mode)
+npm run lint:fix       # auto-fix the fixable subset
 npm run test           # vitest unit tests
-npm run dev            # tsc --watch (run alongside an n8n dev instance)
+npm run dev            # `n8n-node dev` — boots a local n8n with this package symlinked in
+npm run build:watch    # tsc --watch (use this for fast incremental TS rebuilds)
 ```
 
 ### Load the node into a local n8n
+
+The recommended path is `npm run dev`, which symlinks this package into `~/.n8n/custom` and starts n8n for you. If you'd rather wire it up by hand:
 
 1. `cd ~/.n8n/custom && npm link /path/to/this/repo` (or `npm link` globally, then `npm link @simplyprint/n8n-nodes-simplyprint` inside `~/.n8n/custom`).
 2. Start n8n with `N8N_COMMUNITY_PACKAGES_ENABLED=true`.
@@ -60,8 +64,10 @@ Releases are fully automated via GitHub Actions and npm Trusted Publishing (OIDC
 2. Move the `## Unreleased` section of `CHANGELOG.md` under the new version header, then start a fresh `## Unreleased` section for work in progress.
 3. Commit and push: `git commit -am "Release vX.Y.Z" && git push origin main`.
 4. Tag the commit and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. The `.github/workflows/release.yml` workflow fires on `v*.*.*` tags, runs lint + build + vitest, packs, and publishes to npm with `--provenance`. Check the npm page afterwards for the "Built and signed on GitHub Actions" badge.
+5. The `.github/workflows/release.yml` workflow fires on `v*.*.*` tags. It runs `npm run release`, which delegates to `n8n-node release`; in CI mode that command runs lint + build and then `npm publish` with provenance enabled. Check the npm page afterwards for the "Built and signed on GitHub Actions" badge.
 6. A GitHub Release is auto-generated with `softprops/action-gh-release` and the `.tgz` attached.
+
+`npm publish` is intentionally guarded: the `prepublishOnly` hook runs `n8n-node prerelease`, which refuses to proceed unless `RELEASE_MODE=true` is set (the `release` command sets it). This prevents accidentally publishing without provenance from a developer machine.
 
 ### Re-running a failed release
 
