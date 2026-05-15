@@ -430,6 +430,7 @@ interface StoredWebhook extends IDataObject {
 	event?: string;
 }
 
+// eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool -- Webhook trigger: started by SimplyPrint events, not invokable by an AI agent. The rule's AI-sub-node carve-out (empty inputs + non-`main` outputs) doesn't fit a regular event source.
 export class SimplyPrintTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'SimplyPrint Trigger',
@@ -442,7 +443,6 @@ export class SimplyPrintTrigger implements INodeType {
 		defaults: { name: 'SimplyPrint Trigger' },
 		inputs: [],
 		outputs: ['main'],
-		usableAsTool: true,
 		credentials: SIMPLYPRINT_CREDENTIALS,
 		webhooks: [
 			{
