@@ -8,6 +8,7 @@ import type {
 	IWebhookFunctions,
 	IWebhookResponseData,
 } from 'n8n-workflow';
+import { NodeOperationError } from 'n8n-workflow';
 
 import { simplyprintCall } from '../SimplyPrint/common/client';
 import {
@@ -430,6 +431,85 @@ interface StoredWebhook extends IDataObject {
 	event?: string;
 }
 
+interface WebhookOptions {
+	publicBaseUrl?: string;
+	allowPrivateUrl?: boolean;
+}
+
+/**
+ * If the user supplied a "Public Base URL Override", swap the host (and optional
+ * path prefix) of n8n's webhook URL with it. Lets self-hosters point SimplyPrint
+ * at a tunnel / reverse proxy without touching the WEBHOOK_URL env var globally.
+ */
+function applyBaseUrlOverride(rawUrl: string, override: string): string {
+	const trimmed = override.trim().replace(/\/+$/, '');
+	if (!trimmed) return rawUrl;
+	try {
+		const target = new URL(rawUrl);
+		const base = new URL(trimmed);
+		target.protocol = base.protocol;
+		// Set hostname and port separately. Assigning .host preserves the existing
+		// port when the new value omits one, which would leak n8n's :5678 through.
+		target.hostname = base.hostname;
+		target.port = base.port;
+		if (base.pathname && base.pathname !== '/') {
+			target.pathname = base.pathname.replace(/\/+$/, '') + target.pathname;
+		}
+		return target.toString();
+	} catch {
+		return rawUrl;
+	}
+}
+
+/**
+ * True when the URL points at an address SimplyPrint's outbound delivery
+ * can't reach: loopback, RFC1918, link-local, .local mDNS, IPv6 loopback /
+ * ULA. Used to guard against accidentally registering an unroutable URL
+ * (typically `http://localhost:5678/...` from an unconfigured self-host).
+ */
+function isPrivateOrLoopbackUrl(rawUrl: string): boolean {
+	let host: string;
+	try {
+		host = new URL(rawUrl).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	// Strip IPv6 brackets if present
+	if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+
+	if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+	if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+	// IPv6 unique local (fc00::/7) - the leading hex pair starts fc or fd
+	if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
+
+	// IPv4 ranges
+	if (/^127\./.test(host)) return true;
+	if (/^10\./.test(host)) return true;
+	if (/^192\.168\./.test(host)) return true;
+	if (/^169\.254\./.test(host)) return true;
+	const m172 = host.match(/^172\.(\d+)\./);
+	if (m172) {
+		const n = Number(m172[1]);
+		if (n >= 16 && n <= 31) return true;
+	}
+	if (host === '0.0.0.0') return true;
+	return false;
+}
+
+/**
+ * Compute the URL we should register with SimplyPrint:
+ * 1. Take what n8n hands us via `getNodeWebhookUrl`.
+ * 2. If the user set "Public Base URL Override", swap the host.
+ */
+function resolveRegistrationUrl(
+	ctx: IHookFunctions,
+	rawUrl: string,
+): { url: string; options: WebhookOptions } {
+	const options = (ctx.getNodeParameter('webhookOptions', {}) ?? {}) as WebhookOptions;
+	const url = applyBaseUrlOverride(rawUrl, options.publicBaseUrl ?? '');
+	return { url, options };
+}
+
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool -- Webhook trigger: started by SimplyPrint events, not invokable by an AI agent. The rule's AI-sub-node carve-out (empty inputs + non-`main` outputs) doesn't fit a regular event source.
 export class SimplyPrintTrigger implements INodeType {
 	description: INodeTypeDescription = {
@@ -470,13 +550,40 @@ export class SimplyPrintTrigger implements INodeType {
 				type: 'notice',
 				default: '',
 			},
+			{
+				displayName: 'Webhook Options',
+				name: 'webhookOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{
+						displayName: 'Public Base URL Override',
+						name: 'publicBaseUrl',
+						type: 'string',
+						default: '',
+						placeholder: 'https://n8n.example.com',
+						description:
+							'Override the host portion of the webhook URL registered with SimplyPrint. Useful when n8n runs behind NAT or on localhost and you expose it via a tunnel (ngrok, Cloudflare Tunnel) or reverse proxy. Leave blank to use whatever n8n derives from its WEBHOOK_URL / N8N_HOST configuration.',
+					},
+					{
+						displayName: 'Allow Private URL',
+						name: 'allowPrivateUrl',
+						type: 'boolean',
+						default: false,
+						description:
+							'Whether to register the webhook even if its URL points at localhost, a loopback, or a private IP range. Off by default — SimplyPrint can\'t deliver to non-public URLs, so this usually means n8n isn\'t configured for self-hosting yet. Turn on only if you have a reverse proxy SimplyPrint can reach but the URL still looks private (e.g. a private DNS name that resolves publicly).',
+					},
+				],
+			},
 		],
 	};
 
 	webhookMethods = {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
-				const webhookUrl = this.getNodeWebhookUrl('default');
+				const rawUrl = this.getNodeWebhookUrl('default');
+				const webhookUrl = rawUrl ? resolveRegistrationUrl(this, rawUrl).url : '';
 				const workflowData = this.getWorkflowStaticData('node') as StoredWebhook;
 				if (!workflowData.webhookId) return false;
 
@@ -503,8 +610,24 @@ export class SimplyPrintTrigger implements INodeType {
 			},
 
 			async create(this: IHookFunctions): Promise<boolean> {
-				const webhookUrl = this.getNodeWebhookUrl('default');
-				if (!webhookUrl) return false;
+				const rawUrl = this.getNodeWebhookUrl('default');
+				if (!rawUrl) return false;
+				const { url: webhookUrl, options } = resolveRegistrationUrl(this, rawUrl);
+
+				if (!options.allowPrivateUrl && isPrivateOrLoopbackUrl(webhookUrl)) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Refusing to register an unroutable webhook URL with SimplyPrint: ${webhookUrl}`,
+						{
+							description:
+								'SimplyPrint\'s delivery service runs on the public internet and can\'t reach localhost or private addresses. Fix this by one of:\n' +
+								'  1. Set the WEBHOOK_URL env var on your n8n instance to its public HTTPS address (recommended).\n' +
+								'  2. Start n8n with the built-in tunnel: `n8n start --tunnel`.\n' +
+								'  3. Set "Public Base URL Override" under this node\'s Webhook Options to your tunnel / reverse-proxy host.\n' +
+								'  4. If you do have a public-DNS-but-private-looking host (rare), enable "Allow Private URL" under Webhook Options.',
+						},
+					);
+				}
 
 				const event = this.getNodeParameter('event') as string;
 				const eventMeta = EVENT_OPTIONS.find((o) => o.value === event);
