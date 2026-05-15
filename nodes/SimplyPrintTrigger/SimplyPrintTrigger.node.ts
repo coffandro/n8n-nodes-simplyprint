@@ -479,8 +479,8 @@ function isPrivateOrLoopbackUrl(rawUrl: string): boolean {
 
 	if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
 	if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
-	// IPv6 unique local (fc00::/7) - the leading hex pair starts fc or fd
-	if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
+	// IPv6 unique local (fc00::/7) - valid hosts can be compressed (for example, fd::1)
+	if (host.startsWith('fc') || host.startsWith('fd')) return true;
 
 	// IPv4 ranges
 	if (/^127\./.test(host)) return true;
