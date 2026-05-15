@@ -77,6 +77,7 @@ export class SimplyPrint implements INodeType {
 		defaults: { name: 'SimplyPrint' },
 		inputs: ['main'],
 		outputs: ['main'],
+		usableAsTool: true,
 		credentials: SIMPLYPRINT_CREDENTIALS,
 		properties: [authenticationProperty, ...allProperties],
 	};

@@ -1,8 +1,8 @@
 {
-	"node": "n8n-nodes-base.simplyPrintTrigger",
+	"node": "@simplyprint/n8n-nodes-simplyprint.simplyPrintTrigger",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
-	"categories": ["Manufacturing", "Utility"],
+	"categories": ["Productivity", "Utility"],
 	"resources": {
 		"credentialDocumentation": [
 			{

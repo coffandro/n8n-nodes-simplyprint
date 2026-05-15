@@ -1,3 +1,4 @@
+/* eslint-disable @n8n/community-nodes/no-restricted-imports -- vitest is a devDependency only, never shipped to npm */
 import { defineConfig } from 'vitest/config';
 
 // Unit tests cover framework-free pure helpers under nodes/SimplyPrint/common/.

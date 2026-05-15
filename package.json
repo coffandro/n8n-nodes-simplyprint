@@ -26,22 +26,24 @@
   "engines": {
     "node": ">=20.15"
   },
-  "main": "index.js",
   "scripts": {
-    "build": "tsc && gulp build:assets",
-    "dev": "tsc --watch",
+    "build": "n8n-node build",
+    "build:watch": "tsc --watch",
+    "dev": "n8n-node dev",
     "format": "prettier nodes credentials --write",
-    "lint": "eslint nodes credentials package.json",
-    "lintfix": "eslint nodes credentials package.json --fix",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "release": "n8n-node release",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build && npm run lint"
+    "prepublishOnly": "n8n-node prerelease"
   },
   "files": [
     "dist"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
+    "strict": true,
     "credentials": [
       "dist/credentials/SimplyPrintOAuth2Api.credentials.js",
       "dist/credentials/SimplyPrintApi.credentials.js"
@@ -54,12 +56,10 @@
   "devDependencies": {
     "@n8n/node-cli": "^0.23.0",
     "@types/node": "^20.12.7",
-    "@typescript-eslint/parser": "~7.15.0",
-    "eslint": "^8.57.0",
-    "eslint-plugin-n8n-nodes-base": "^1.16.3",
-    "gulp": "^4.0.2",
+    "eslint": "^9.39.0",
     "n8n-workflow": "^1.82.0",
     "prettier": "^3.3.2",
+    "release-it": "^20.0.1",
     "typescript": "~5.4.5",
     "vitest": "^1.6.1"
   },

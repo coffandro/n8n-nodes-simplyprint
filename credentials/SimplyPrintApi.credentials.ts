@@ -17,6 +17,8 @@ export class SimplyPrintApi implements ICredentialType {
 
 	documentationUrl = 'https://simplyprint.io/integrations/n8n';
 
+	icon = 'file:simplyprint.svg' as const;
+
 	properties: INodeProperties[] = [
 		{
 			displayName: 'Panel URL',

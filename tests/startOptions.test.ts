@@ -1,3 +1,4 @@
+/* eslint-disable @n8n/community-nodes/no-restricted-imports -- vitest is a devDependency only, never shipped to npm */
 import { describe, it, expect } from 'vitest';
 
 import { normalizeStartOptions } from '../nodes/SimplyPrint/common/startOptions';

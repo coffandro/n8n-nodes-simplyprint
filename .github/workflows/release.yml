@@ -15,10 +15,10 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest
     environment: npm
-    
+
     permissions:
       contents: write   # needed by softprops/action-gh-release to create the release
-      id-token: write   # for npm Trusted Publishing (OIDC)
+      id-token: write   # for npm Trusted Publishing (OIDC) + provenance
 
     steps:
       - name: Checkout repository
@@ -27,24 +27,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24.x'
+          node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        # --legacy-peer-deps: @n8n/node-cli@0.23 peer-demands eslint >= 9
-        # while eslint-plugin-n8n-nodes-base is still on the eslint 8 line.
-        run: npm ci --ignore-scripts --legacy-peer-deps
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Build
-        run: npm run build
-
-      # Produces the .tgz on disk so the GitHub Release step can attach it.
-      # `npm publish` alone uploads to the registry but doesn't leave a tarball.
-      - name: Pack tarball
-        run: npm pack
+        run: npm ci --ignore-scripts
 
       # Prerelease versions (0.4.0-beta.1, 1.0.0-rc.2, ...) publish under the
       # `beta` dist-tag so `npm install <pkg>` still serves the last stable.
@@ -61,8 +48,17 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish package
-        run: npm publish --access public --provenance --tag ${{ steps.distTag.outputs.tag }}
+      # `n8n-node release` in CI mode (GITHUB_ACTIONS=true is set automatically)
+      # runs lint + build + `npm publish` with NPM_CONFIG_PROVENANCE=true. We pass
+      # NPM_CONFIG_TAG via env so prereleases don't overwrite the `latest` dist-tag.
+      - name: Release via n8n-node CLI
+        env:
+          NPM_CONFIG_TAG: ${{ steps.distTag.outputs.tag }}
+        run: npm run release
+
+      # Produces the .tgz on disk so the GitHub Release step can attach it.
+      - name: Pack tarball
+        run: npm pack
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

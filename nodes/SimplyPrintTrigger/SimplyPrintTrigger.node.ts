@@ -88,7 +88,6 @@ const EVENT_OPTIONS = [
 	{
 		name: 'Printer AutoPrint State Changed',
 		value: 'printer.autoprint_state_changed',
-		// eslint-disable-next-line n8n-nodes-base/node-param-operation-option-action-miscased -- "AutoPrint" is a SimplyPrint trademark, preserve casing
 		action: 'Printer AutoPrint state changed',
 		description: 'A printer\'s AutoPrint enabled / paused / disabled state changed',
 	},
@@ -150,7 +149,6 @@ const EVENT_OPTIONS = [
 	{
 		name: 'Company AutoPrint State Changed',
 		value: 'company.autoprint_state_changed',
-		// eslint-disable-next-line n8n-nodes-base/node-param-operation-option-action-miscased -- "AutoPrint" is a SimplyPrint trademark, preserve casing
 		action: 'Company AutoPrint state changed',
 		description: 'AutoPrint was enabled or disabled account-wide',
 	},
@@ -444,6 +442,7 @@ export class SimplyPrintTrigger implements INodeType {
 		defaults: { name: 'SimplyPrint Trigger' },
 		inputs: [],
 		outputs: ['main'],
+		usableAsTool: true,
 		credentials: SIMPLYPRINT_CREDENTIALS,
 		webhooks: [
 			{

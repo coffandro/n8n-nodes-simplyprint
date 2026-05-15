@@ -28,6 +28,8 @@ export class SimplyPrintOAuth2Api implements ICredentialType {
 
 	documentationUrl = 'https://simplyprint.io/integrations/n8n';
 
+	icon = 'file:simplyprint.svg' as const;
+
 	extends = ['oAuth2Api'];
 
 	properties: INodeProperties[] = [
@@ -55,6 +57,7 @@ export class SimplyPrintOAuth2Api implements ICredentialType {
 			displayName: 'Client Secret',
 			name: 'clientSecret',
 			type: 'hidden',
+			typeOptions: { password: true },
 			default: 'febe59df3f9668c56c6d4a96e53aaa508a0efe9e1e3d3955a4222bd58c555e7b',
 		},
 		{
