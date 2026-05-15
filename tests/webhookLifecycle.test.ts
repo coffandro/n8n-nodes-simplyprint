@@ -16,6 +16,7 @@ function mockContext(opts: {
 	webhookUrl?: string;
 	httpResponder?: (req: { method: string; url: string; body?: unknown }) => unknown;
 	event?: string;
+	webhookOptions?: { publicBaseUrl?: string; allowPrivateUrl?: boolean };
 }) {
 	const staticData: StaticData = opts.staticData ?? {};
 	const httpRequestWithAuthentication = vi.fn(async (_cred: string, req: { method: string; url: string; body?: unknown }) => {
@@ -29,6 +30,7 @@ function mockContext(opts: {
 		getNodeParameter: vi.fn((name: string) => {
 			if (name === 'authentication') return 'apiKey';
 			if (name === 'event') return opts.event ?? 'job.done';
+			if (name === 'webhookOptions') return opts.webhookOptions ?? {};
 			return undefined;
 		}),
 		getCredentials: vi.fn(async () => ({ panelUrl: 'https://simplyprint.io', companyId: 77 })),
@@ -183,5 +185,85 @@ describe('SimplyPrintTrigger.webhookMethods', () => {
 		expect(
 			httpRequestWithAuthentication.mock.calls.some((c) => c[1].url.endsWith('/webhooks/Delete')),
 		).toBe(false);
+	});
+
+	it('create refuses to register a localhost URL by default', async () => {
+		const { ctx, httpRequestWithAuthentication } = mockContext({
+			webhookUrl: 'http://localhost:5678/webhook/abc',
+		});
+		await expect(methods.create.call(ctx as never)).rejects.toThrow(/unroutable/i);
+		// And it must not have called the backend
+		expect(
+			httpRequestWithAuthentication.mock.calls.some((c) => c[1].url.endsWith('/webhooks/Create')),
+		).toBe(false);
+	});
+
+	it('create refuses RFC1918 / loopback / link-local addresses by default', async () => {
+		for (const url of [
+			'http://127.0.0.1:5678/webhook/abc',
+			'http://10.0.0.5:5678/webhook/abc',
+			'http://192.168.1.10:5678/webhook/abc',
+			'http://172.20.0.1:5678/webhook/abc',
+			'http://169.254.10.10:5678/webhook/abc',
+			'http://[::1]:5678/webhook/abc',
+			'http://n8n.local/webhook/abc',
+		]) {
+			const { ctx } = mockContext({ webhookUrl: url });
+			await expect(methods.create.call(ctx as never)).rejects.toThrow(/unroutable/i);
+		}
+	});
+
+	it('create allows a private URL when Allow Private URL is enabled', async () => {
+		const { ctx, httpRequestWithAuthentication } = mockContext({
+			webhookUrl: 'http://10.0.0.5:5678/webhook/abc',
+			webhookOptions: { allowPrivateUrl: true },
+			httpResponder: (req) => {
+				if (req.url.endsWith('/webhooks/Create')) return { status: true, webhook: { id: 1 } };
+				return { status: true, company: { id: 77 } };
+			},
+		});
+		const ok = await methods.create.call(ctx as never);
+		expect(ok).toBe(true);
+		const createCall = httpRequestWithAuthentication.mock.calls.find((c) =>
+			c[1].url.endsWith('/webhooks/Create'),
+		);
+		const body = createCall?.[1].body as Record<string, unknown>;
+		expect(body.url).toBe('http://10.0.0.5:5678/webhook/abc');
+	});
+
+	it('create uses Public Base URL Override to rewrite the host', async () => {
+		const { ctx, httpRequestWithAuthentication } = mockContext({
+			webhookUrl: 'http://localhost:5678/webhook/abc/webhook',
+			webhookOptions: { publicBaseUrl: 'https://n8n.example.com' },
+			httpResponder: (req) => {
+				if (req.url.endsWith('/webhooks/Create')) return { status: true, webhook: { id: 2 } };
+				return { status: true, company: { id: 77 } };
+			},
+		});
+		const ok = await methods.create.call(ctx as never);
+		expect(ok).toBe(true);
+		const createCall = httpRequestWithAuthentication.mock.calls.find((c) =>
+			c[1].url.endsWith('/webhooks/Create'),
+		);
+		const body = createCall?.[1].body as Record<string, unknown>;
+		expect(body.url).toBe('https://n8n.example.com/webhook/abc/webhook');
+	});
+
+	it('create preserves the path prefix from Public Base URL Override', async () => {
+		const { ctx, httpRequestWithAuthentication } = mockContext({
+			webhookUrl: 'http://localhost:5678/webhook/abc/webhook',
+			webhookOptions: { publicBaseUrl: 'https://proxy.example.com/n8n/' },
+			httpResponder: (req) => {
+				if (req.url.endsWith('/webhooks/Create')) return { status: true, webhook: { id: 3 } };
+				return { status: true, company: { id: 77 } };
+			},
+		});
+		const ok = await methods.create.call(ctx as never);
+		expect(ok).toBe(true);
+		const createCall = httpRequestWithAuthentication.mock.calls.find((c) =>
+			c[1].url.endsWith('/webhooks/Create'),
+		);
+		const body = createCall?.[1].body as Record<string, unknown>;
+		expect(body.url).toBe('https://proxy.example.com/n8n/webhook/abc/webhook');
 	});
 });
