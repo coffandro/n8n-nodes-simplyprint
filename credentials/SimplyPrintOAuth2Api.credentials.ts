@@ -28,7 +28,7 @@ export class SimplyPrintOAuth2Api implements ICredentialType {
 
 	documentationUrl = 'https://simplyprint.io/integrations/n8n';
 
-	icon = 'file:simplyprint.svg' as const;
+	icon = 'file:../nodes/SimplyPrint/simplyprint.svg' as const;
 
 	extends = ['oAuth2Api'];
 

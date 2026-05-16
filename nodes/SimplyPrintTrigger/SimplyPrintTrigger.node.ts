@@ -681,16 +681,39 @@ export class SimplyPrintTrigger implements INodeType {
 	/**
 	 * Called when the user clicks "Execute step" / "Listen for test event" in
 	 * the editor. Returns a `manualTriggerFunction` that fetches a real sample
-	 * payload from `webhooks/GetSamplePayload` so the user sees the true
-	 * shape of the event body right away — no need to wait for a live delivery
-	 * to round-trip through the webhook registration.
+	 * payload from `webhooks/GetSamplePayload` so the user sees an event body
+	 * with the same `data` shape a live delivery would carry — no need to wait
+	 * for a live event to round-trip through the webhook registration.
 	 *
-	 * The emitted shape is the full envelope a live POST would carry:
-	 * `{ webhook_id, event, timestamp, data, source }`. `source` is `"real"`
-	 * when the backend had a stored sample for this event and `"synthetic"`
-	 * when it had to build one on the fly. Matches what `webhook()` returns
-	 * on a live delivery, so the downstream workflow sees identical data in
-	 * test-mode and prod-mode runs.
+	 * --- Emitted envelopes ---
+	 *
+	 *   Live deliveries (`webhook()` handler below) emit SimplyPrint's raw
+	 *   POST body verbatim — typically `{ webhook_id, event, timestamp, data }`
+	 *   with no `source` field.
+	 *
+	 *   This manual-trigger path emits a sample envelope:
+	 *     { webhook_id, event, timestamp, data, source, ... }
+	 *
+	 *   `source` distinguishes three test-only states:
+	 *     - "real":      SP returned a stored sample mirrored from the user's
+	 *                    own historical data.
+	 *     - "synthetic": SP built a sample on the fly because no real one
+	 *                    existed for this event in this account.
+	 *     - "fallback":  the GetSamplePayload call itself failed (older SP
+	 *                    instance, missing scope, network error, ...). The
+	 *                    envelope carries `data: {}` plus the diagnostic-only
+	 *                    fields described below so the user can see *why*
+	 *                    instead of a silent empty payload.
+	 *
+	 *   Fallback-only extra keys (never present on `"real"`/`"synthetic"`
+	 *   samples or on live deliveries):
+	 *     - `_fallback_reason`:    error message from the underlying fetch
+	 *     - `_fallback_http_code`: HTTP status from the underlying fetch,
+	 *                              omitted if not an HTTP error
+	 *
+	 *   Downstream workflows that branch on the envelope should key off
+	 *   `source` (production code: ignore anything where `source === 'fallback'`,
+	 *   or treat it as a hard error).
 	 *
 	 * n8n only runs this in manual/test mode. In activated (live) workflows
 	 * the webhook registration in `webhookMethods.create` + the `webhook()`
@@ -701,6 +724,9 @@ export class SimplyPrintTrigger implements INodeType {
 
 		const manualTriggerFunction = async (): Promise<void> => {
 			let sample: IDataObject | undefined;
+			let fallbackReason: string | undefined;
+			let fallbackHttpCode: number | undefined;
+
 			try {
 				const res = await simplyprintCall<{
 					samples?: Array<{
@@ -716,10 +742,32 @@ export class SimplyPrintTrigger implements INodeType {
 					qs: { event, limit: 1 },
 				});
 				sample = res.samples?.[0] as IDataObject | undefined;
-			} catch {
+				if (!sample) {
+					fallbackReason = `webhooks/GetSamplePayload returned no samples for event "${event}"`;
+				}
+			} catch (err) {
 				// Older SP instances, scope errors, or network failures fall
 				// through to the synthetic fallback below rather than breaking
-				// the "Execute step" flow.
+				// the "Execute step" flow. We surface the error in the fallback
+				// envelope so the user can tell `data: {}` apart from a silent
+				// fetch failure.
+				const e = err as {
+					message?: string;
+					httpCode?: number | string;
+					cause?: { httpCode?: number | string };
+				};
+				const code = e?.httpCode ?? e?.cause?.httpCode;
+				fallbackHttpCode = typeof code === 'string' ? Number(code) || undefined : code;
+				fallbackReason = e?.message ?? 'unknown error fetching sample payload';
+				try {
+					this.logger.warn(
+						`[SimplyPrintTrigger] Sample fetch for "${event}" failed: ${fallbackReason}${
+							fallbackHttpCode ? ` (HTTP ${fallbackHttpCode})` : ''
+						}`,
+					);
+				} catch {
+					// `logger` is not present on every n8n version of ITriggerFunctions
+				}
 			}
 
 			if (!sample) {
@@ -729,6 +777,8 @@ export class SimplyPrintTrigger implements INodeType {
 					timestamp: Math.floor(Date.now() / 1000),
 					data: {},
 					source: 'fallback',
+					...(fallbackReason ? { _fallback_reason: fallbackReason } : {}),
+					...(fallbackHttpCode ? { _fallback_http_code: fallbackHttpCode } : {}),
 				};
 			}
 
