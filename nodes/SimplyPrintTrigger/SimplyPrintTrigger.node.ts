@@ -701,6 +701,9 @@ export class SimplyPrintTrigger implements INodeType {
 
 		const manualTriggerFunction = async (): Promise<void> => {
 			let sample: IDataObject | undefined;
+			let fallbackReason: string | undefined;
+			let fallbackHttpCode: number | undefined;
+
 			try {
 				const res = await simplyprintCall<{
 					samples?: Array<{
@@ -716,10 +719,32 @@ export class SimplyPrintTrigger implements INodeType {
 					qs: { event, limit: 1 },
 				});
 				sample = res.samples?.[0] as IDataObject | undefined;
-			} catch {
+				if (!sample) {
+					fallbackReason = `webhooks/GetSamplePayload returned no samples for event "${event}"`;
+				}
+			} catch (err) {
 				// Older SP instances, scope errors, or network failures fall
 				// through to the synthetic fallback below rather than breaking
-				// the "Execute step" flow.
+				// the "Execute step" flow. We surface the error in the fallback
+				// envelope so the user can tell `data: {}` apart from a silent
+				// fetch failure.
+				const e = err as {
+					message?: string;
+					httpCode?: number | string;
+					cause?: { httpCode?: number | string };
+				};
+				const code = e?.httpCode ?? e?.cause?.httpCode;
+				fallbackHttpCode = typeof code === 'string' ? Number(code) || undefined : code;
+				fallbackReason = e?.message ?? 'unknown error fetching sample payload';
+				try {
+					this.logger.warn(
+						`[SimplyPrintTrigger] Sample fetch for "${event}" failed: ${fallbackReason}${
+							fallbackHttpCode ? ` (HTTP ${fallbackHttpCode})` : ''
+						}`,
+					);
+				} catch {
+					// `logger` is not present on every n8n version of ITriggerFunctions
+				}
 			}
 
 			if (!sample) {
@@ -729,6 +754,8 @@ export class SimplyPrintTrigger implements INodeType {
 					timestamp: Math.floor(Date.now() / 1000),
 					data: {},
 					source: 'fallback',
+					...(fallbackReason ? { _fallback_reason: fallbackReason } : {}),
+					...(fallbackHttpCode ? { _fallback_http_code: fallbackHttpCode } : {}),
 				};
 			}
 

@@ -82,17 +82,51 @@ async function resolveAuth(ctx: SimplyprintContext): Promise<ResolvedAuth> {
 	return { kind, credentialType: 'simplyPrintOAuth2Api', panelUrl, companyId };
 }
 
+const OAUTH_COMPANY_CACHE_PREFIX = 'simplyPrintCompany:';
+
+function oauthCompanyCacheKey(panelUrl: string): string {
+	return `${OAUTH_COMPANY_CACHE_PREFIX}${panelUrl}`;
+}
+
+/**
+ * Drop the cached OAuth company id for `panelUrl`. Called when SimplyPrint
+ * rejects a request with "OAuth2 token is not valid for this company": the
+ * cache survives reauth + credential swaps within a single workflow, so a
+ * token that's been rebound to a different org will keep hitting the wrong
+ * /api/{companyId}/... path forever otherwise.
+ */
+function invalidateOAuthCompanyCache(ctx: SimplyprintContext, panelUrl: string): void {
+	const staticData = ctx.getWorkflowStaticData('global') as IDataObject;
+	delete staticData[oauthCompanyCacheKey(panelUrl)];
+}
+
+function isCompanyMismatchError(input: unknown): boolean {
+	if (!input) return false;
+	const e = input as {
+		message?: string;
+		description?: string;
+		cause?: { message?: string; description?: string };
+	};
+	const haystack = [e.message, e.description, e.cause?.message, e.cause?.description]
+		.filter((v): v is string => typeof v === 'string')
+		.join(' ')
+		.toLowerCase();
+	return haystack.includes('not valid for this company');
+}
+
 /**
  * Resolve (and cache) the OAuth2 token's bound company via `GET /api/0/account/GetUser`.
  * The patched GetUser endpoint returns `{ user, company }` for OAuth callers
  * (see api/API/Endpoints/account/GetUser.php).
  *
- * Cache lives in workflow static data keyed by panel URL so credential swaps
- * across accounts don't poison it.
+ * Cache lives in workflow static data keyed by panel URL. The cache can go
+ * stale across reauth / admin-side org rebinding; `simplyprintCall` watches
+ * for SP's company-mismatch error and drops the entry via
+ * `invalidateOAuthCompanyCache` so the next request re-resolves.
  */
 async function resolveOAuthCompany(ctx: SimplyprintContext, panelUrl: string): Promise<number> {
 	const staticData = ctx.getWorkflowStaticData('global') as IDataObject;
-	const cacheKey = `simplyPrintCompany:${panelUrl}`;
+	const cacheKey = oauthCompanyCacheKey(panelUrl);
 	const cached = staticData[cacheKey];
 	if (typeof cached === 'number' && cached > 0) return cached;
 
@@ -128,38 +162,76 @@ export async function simplyprintCall<T = unknown>(
 	ctx: SimplyprintContext,
 	opts: SimplyprintCallOptions,
 ): Promise<SimplyprintResponse<T>> {
-	const auth = await resolveAuth(ctx);
-	const companyId = opts.company !== undefined ? opts.company : auth.companyId;
+	let auth = await resolveAuth(ctx);
+	let companyId = opts.company !== undefined ? opts.company : auth.companyId;
+	// Auto-retry the request once after re-resolving the OAuth company if SP
+	// reports the cached company is wrong. Only kicks in when we picked the
+	// company ourselves (`opts.company === undefined`) and the auth is OAuth2.
+	const canSelfHealCompany = () => opts.company === undefined && auth.kind === 'oAuth2';
 
-	const url = opts.baseUrlOverride
-		? `${opts.baseUrlOverride.replace(/\/+$/, '')}/${companyId}/${opts.path.replace(/^\//, '')}`
-		: `${auth.panelUrl}/api/${companyId}/${opts.path.replace(/^\//, '')}`;
-
-	const requestOptions: IHttpRequestOptions = {
-		method: opts.method,
-		url,
-		qs: opts.qs,
-		json: true,
+	const buildRequest = (cid: number): IHttpRequestOptions => {
+		const url = opts.baseUrlOverride
+			? `${opts.baseUrlOverride.replace(/\/+$/, '')}/${cid}/${opts.path.replace(/^\//, '')}`
+			: `${auth.panelUrl}/api/${cid}/${opts.path.replace(/^\//, '')}`;
+		const request: IHttpRequestOptions = {
+			method: opts.method,
+			url,
+			qs: opts.qs,
+			json: true,
+		};
+		if (opts.formData) {
+			// httpRequestWithAuthentication supports `body` + `formData`-shaped
+			// requests by setting body to the object and disabling json.
+			request.body = opts.formData;
+			request.json = false;
+		} else if (opts.body !== undefined) {
+			request.body = opts.body;
+		}
+		return request;
 	};
 
-	if (opts.formData) {
-		// httpRequestWithAuthentication supports `body` + `formData`-shaped
-		// requests by setting body to the object and disabling json.
-		requestOptions.body = opts.formData;
-		requestOptions.json = false;
-	} else if (opts.body !== undefined) {
-		requestOptions.body = opts.body;
-	}
-
 	let response: unknown;
+	let thrown: unknown;
 	try {
 		response = await ctx.helpers.httpRequestWithAuthentication.call(
 			ctx,
 			auth.credentialType,
-			requestOptions,
+			buildRequest(companyId),
 		);
 	} catch (error) {
-		throw new NodeApiError(ctx.getNode(), error as JsonObject);
+		thrown = error;
+	}
+
+	const responseLooksMismatched = (r: unknown): boolean => {
+		const body = r as SimplyprintResponse<T> | undefined;
+		return (
+			!!body &&
+			body.status === false &&
+			isCompanyMismatchError({ message: body.message })
+		);
+	};
+
+	if (
+		canSelfHealCompany() &&
+		(isCompanyMismatchError(thrown) || responseLooksMismatched(response))
+	) {
+		invalidateOAuthCompanyCache(ctx, auth.panelUrl);
+		auth = await resolveAuth(ctx);
+		companyId = auth.companyId;
+		thrown = undefined;
+		try {
+			response = await ctx.helpers.httpRequestWithAuthentication.call(
+				ctx,
+				auth.credentialType,
+				buildRequest(companyId),
+			);
+		} catch (retryError) {
+			thrown = retryError;
+		}
+	}
+
+	if (thrown) {
+		throw new NodeApiError(ctx.getNode(), thrown as JsonObject);
 	}
 
 	const body = response as SimplyprintResponse<T>;
