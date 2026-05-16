@@ -1,6 +1,6 @@
 {
   "name": "@simplyprint/n8n-nodes-simplyprint",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "n8n community node for SimplyPrint - monitor 3D printer fleets, manage queues, automate print jobs.",
   "keywords": [
     "n8n-community-node-package",

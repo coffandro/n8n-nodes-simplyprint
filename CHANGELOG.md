@@ -2,6 +2,43 @@
 
 All notable changes to `n8n-nodes-simplyprint` are documented here.
 
+## 0.4.1
+
+Polish + reliability follow-up to 0.4.0. Adds two real self-host fixes (the trigger could silently register a `localhost` URL with SimplyPrint that the SP backend can't reach; the OAuth company id got cached forever after reauth and bricked every subsequent call with `OAuth2 token is not valid for this company`), and brings the package up to the layout expected for n8n's verified-community-node review.
+
+### Trigger: self-host correctness
+
+- **Refuses to register unroutable webhook URLs.** `webhookMethods.create()` now throws a clear `NodeOperationError` if n8n hands it a webhook URL that points at `localhost`, the loopback ranges (`127.0.0.0/8`, `::1`), RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local (`169.254/16`), `*.local` / `*.localhost`, IPv6 ULA (`fc00::/7`), or `0.0.0.0`. The error message lists the four ways to fix it (`WEBHOOK_URL`, `n8n start --tunnel`, the new override field, or the new toggle below). Previously these URLs were registered silently and SimplyPrint's delivery service had no way to reach them.
+- **New "Webhook Options" collection on the trigger node.**
+    - **Public Base URL Override** — overrides the host (and optional path prefix) of the URL we register with SimplyPrint. Useful when n8n runs behind NAT / on localhost but is reachable via a tunnel (ngrok, Cloudflare Tunnel) or reverse proxy. Preserves n8n's path so the actual webhook still resolves on receive.
+    - **Allow Private URL** — disables the routability guard. Off by default; turn on only if you have a reverse proxy SimplyPrint can reach but the URL still looks private to the guard.
+- `checkExists()` uses the same resolved URL as `create()`, so the URL-equality probe still detects drift across redeploys when the override changes.
+
+### Trigger: manual-trigger diagnostics
+
+- **Sample-fetch failure is no longer silent.** When `webhooks/GetSamplePayload` errors, the emitted envelope now includes `_fallback_reason` (the underlying error message) and, where applicable, `_fallback_http_code` (the HTTP status). Previously the user just saw `data: {}` with `source: "fallback"` and no clue why.
+- **Envelope contract is now documented up-front in the `trigger()` docstring.** Live deliveries pass SP's raw body through; the manual-trigger path emits a sample envelope where `source` is `"real"`, `"synthetic"`, or `"fallback"`, with the two `_fallback_*` keys only appearing on the `"fallback"` branch.
+
+### OAuth: company id self-heal
+
+- **`simplyprintCall` auto-recovers from stale-company-id errors.** The OAuth credential's resolved company is cached in workflow static data keyed by panel URL. If a user reauthenticates with a token bound to a different org (or the SimplyPrint admin moves them between orgs), the cache hands back the old id and every subsequent call hits `/api/<old>/...` and gets `OAuth2 token is not valid for this company`. The client now detects that exact error (in either the thrown 403 or the `{status: false, message: ...}` envelope), drops the cache entry, re-resolves the company via `account/GetUser`, and retries the original request once. Only kicks in for OAuth credentials when the caller didn't pass an explicit `company` override. One retry only; a second mismatch surfaces normally.
+
+### Verified-community-node readiness
+
+- **Migrated to `@n8n/node-cli` scripts.** `package.json` scripts are now `n8n-node build` / `dev` / `lint` / `release` / `prerelease`; `n8n.strict: true` enabled. The CLI runs the official lint suite, blocks accidental local `npm publish` (you must go through `npm run release`), and in CI mode publishes with provenance.
+- **ESLint flat config.** `.eslintrc.js` removed; `eslint.config.mjs` re-exports `@n8n/node-cli/eslint`, which pulls in `@n8n/eslint-plugin-community-nodes` + the legacy `eslint-plugin-n8n-nodes-base` rules with the right overrides. Bumped eslint to v9.
+- **Codex metadata corrected.** The `node` field in `SimplyPrint.node.json` / `SimplyPrintTrigger.node.json` now follows the `<packageName>.<nodeName>` convention (was using the built-in `n8n-nodes-base.` prefix). `categories` replaced the invalid `Manufacturing` with the documented enum (`Productivity`, `Utility`).
+- **Action node declared as `usableAsTool: true`** so it's pickable from the AI Agent node. Trigger node opts out with a justified `eslint-disable-next-line` (a webhook trigger isn't AI-callable).
+- **Dropped `gulpfile.js` and `index.js`.** `n8n-node build` runs tsc directly and copies static assets internally.
+- **Cleaner `dist/`.** Removed `incremental: true` and `package.json` from the tsconfig include set so the build no longer ships `dist/package.json` (2 kB) or `dist/tsconfig.tsbuildinfo` (76 kB). Package tarball drops from 68.7 kB → 42.4 kB.
+- **Credential icons fixed.** Both credentials now point at `file:../nodes/SimplyPrint/simplyprint.svg`. Verified against n8n's `getIconPath` normalizer in `directory-loader.ts` — `path.join` collapses the `..` cleanly and the served URL stays inside the package directory.
+- **Release workflow.** `release.yml` now delegates to `npm run release` (which routes through `n8n-node release`); preserves prerelease → `beta` dist-tag handling via `NPM_CONFIG_TAG`.
+
+### Internal
+
+- Tests grew from 81 → 90 passing: new coverage for the OAuth company self-heal (4 cases), the webhook URL routability guard + override (5 cases).
+- `getNodeParameter('webhookOptions', {})` is null-safe so older mock contexts in tests don't trip over the new collection.
+
 ## 0.4.0
 
 End-to-end audit pass mirroring the work the Activepieces piece received in 0.5.10. SimplyPrint's `AjaxBaseController` keeps `$_POST` (request body) and `$_GET` (URL query string) strictly separate; they are NOT merged. Endpoints declare which scope each field comes from, and helpers like `RequirePrinter()` / `RequireFilament()` default to `$_GET`. Several actions in 0.3.x had been calling endpoints with the right field names but in the wrong scope, which the backend silently dropped. Other endpoints had the wrong path entirely and were 404-ing. None of these surfaced as obvious errors in the n8n UI: toggles never took effect, and reads returned empty.
